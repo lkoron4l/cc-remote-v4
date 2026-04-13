@@ -1,0 +1,46 @@
+name: Build distribution ZIP
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  zip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build distribution ZIP
+        run: node scripts/build-zip.mjs
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path . -Filter 'CC-Remote-v4-*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'ZIP not found' }
+          $hash = (CertUtil -hashfile $zip.FullName SHA256 | Select-String -NotMatch 'CertUtil|hash' | ForEach-Object { $_.Line.Trim() })[0]
+          "ZIP_PATH=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIP_NAME=$($zip.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "SHA-256: $hash"
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_PATH }}
+          body: |
+            ## CC Remote ${{ github.ref_name }}
+
+            **ZIP**: `${{ env.ZIP_NAME }}`
+            **SHA-256**: `${{ env.ZIP_SHA256 }}`
+
+            セットアップ手順は ZIP 内 `docs/SETUP_NEW_PC.md` を参照。
