@@ -1,7 +1,7 @@
 // CC-Remote v4 — PinLogin (4-digit screen lock PIN, Google OAuth gates PC registration)
 import { useState, useEffect, useRef } from 'react';
 import { soundSessionStart, soundError } from '../utils/sounds';
-import { setToken, getApiBase } from '../utils/api';
+import { setToken, getApiBase, setRemoteBase } from '../utils/api';
 
 const PIN_MIN = 4;
 const PIN_MAX = 4;
@@ -55,16 +55,36 @@ export default function PinLogin({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [jackIn, setJackIn] = useState(false);
   const [googleSession, setGoogleSession] = useState(() => localStorage.getItem('ccr-google-session') || '');
+  const [remoteBase, setRemoteBaseState] = useState(() => localStorage.getItem('ccr-remote-base') || '');
+  const [tunnelInput, setTunnelInput] = useState('');
   const googleBtnRef = useRef(null);
 
-  // Fetch PIN status on mount
+  // Detect if we're served from a non-API origin (e.g. GitHub Pages)
+  const needsRemoteBase = !remoteBase && !/^https?:\/\/(localhost|127\.0\.0\.1)/.test(window.location.origin);
+
+  // Fetch PIN status on mount (only when we have a base)
   useEffect(() => {
+    if (needsRemoteBase) { setHasPin(false); return; }
     const base = getApiBase();
     fetch(`${base}/auth/status`)
       .then(r => r.ok ? r.json() : { hasPin: false })
       .then(data => setHasPin(!!data.hasPin))
       .catch(() => setHasPin(false));
-  }, []);
+  }, [remoteBase, needsRemoteBase]);
+
+  const handleSaveTunnel = (e) => {
+    e.preventDefault();
+    let v = tunnelInput.trim().replace(/\/+$/, '');
+    if (!v) { setError('URLを入力してください'); return; }
+    if (!/^https?:\/\//.test(v)) v = 'https://' + v;
+    if (!/\.trycloudflare\.com$/i.test(v.replace(/^https?:\/\//, '').split('/')[0])) {
+      setError('trycloudflare.com の URL を指定してください');
+      return;
+    }
+    setRemoteBase(v);
+    setRemoteBaseState(v);
+    setError('');
+  };
 
   // Initialize Google Identity Services when no session yet
   useEffect(() => {
@@ -180,6 +200,55 @@ export default function PinLogin({ onLogin }) {
       setPin('');
     }
   };
+
+  if (needsRemoteBase) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full cyber-floor scanlines px-6 animate-fade-in">
+        <div className="w-full max-w-xs relative z-10">
+          <div className="flex justify-center mb-5">
+            <div className="w-14 h-14 rounded-xl bg-[#0a0a0b] border border-cyber-600/30 flex items-center justify-center animate-glow-pulse">
+              <span className="text-[#22c55e] text-base font-mono font-bold">&gt;_C</span>
+            </div>
+          </div>
+          <div className="text-center mb-6">
+            <h1 className="text-2xl font-pixel text-navi-glow mb-2 tracking-wider animate-neon-flicker">
+              CC REMOTE
+            </h1>
+            <div className="text-txt-muted text-xs font-mono tracking-[0.15em]">
+              // PC接続URLを入力
+            </div>
+          </div>
+          {error && (
+            <div className="text-alert-red text-center text-xs mb-3 font-mono animate-fade-in">
+              ! ERROR: {error}
+            </div>
+          )}
+          <form onSubmit={handleSaveTunnel} className="space-y-3">
+            <input
+              type="text"
+              value={tunnelInput}
+              onChange={(e) => setTunnelInput(e.target.value)}
+              placeholder="xxx-xxx-xxx.trycloudflare.com"
+              className="w-full px-3 py-2 rounded bg-cyber-800 border border-cyber-500 text-txt-bright text-sm font-mono focus:border-navi-glow focus:outline-none"
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="w-full py-3 rounded-lg font-bold text-sm font-pixel tracking-wider neon-btn text-txt-bright shadow-neon-blue"
+            >
+              CONNECT
+            </button>
+          </form>
+          <div className="text-txt-muted/60 text-center text-[10px] mt-4 font-mono">
+            PCのサーバーログに表示される URL を貼り付け
+          </div>
+          <div className="text-txt-muted/40 text-center text-[10px] mt-1 font-mono">
+            v4.0 // Google + PIN
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (hasPin === null) {
     return (
