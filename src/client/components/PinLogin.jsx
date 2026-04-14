@@ -109,7 +109,7 @@ export default function PinLogin({ onLogin }) {
       const state = base64url(stateBytes);
       sessionStorage.setItem('ccr-pkce-verifier', verifier);
       sessionStorage.setItem('ccr-pkce-state', state);
-      const redirectUri = window.location.origin + window.location.pathname;
+      const redirectUri = window.location.origin + window.location.pathname.replace(/\/?$/, '/');
       sessionStorage.setItem('ccr-pkce-redirect', redirectUri);
       const params = new URLSearchParams({
         client_id: GOOGLE_CLIENT_ID,
