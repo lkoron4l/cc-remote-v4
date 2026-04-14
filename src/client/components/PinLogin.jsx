@@ -98,8 +98,6 @@ export default function PinLogin({ onLogin }) {
       }
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
-        use_fedcm_for_prompt: true,
-        itp_support: true,
         callback: async (response) => {
           try {
             const base = getApiBase();
