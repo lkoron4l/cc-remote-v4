@@ -1,5 +1,5 @@
 // CC-Remote v4 — PinLogin (4-digit screen lock PIN, Google OAuth gates PC registration)
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { soundSessionStart, soundError } from '../utils/sounds';
 import { setToken, getApiBase, setRemoteBase } from '../utils/api';
 
@@ -57,7 +57,7 @@ export default function PinLogin({ onLogin }) {
   const [googleSession, setGoogleSession] = useState(() => localStorage.getItem('ccr-google-session') || '');
   const [remoteBase, setRemoteBaseState] = useState(() => localStorage.getItem('ccr-remote-base') || '');
   const [tunnelInput, setTunnelInput] = useState('');
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const googleBtnRef = useRef(null);
 
   // Detect if we're served from a non-API origin (e.g. GitHub Pages)
   const needsRemoteBase = !remoteBase && !/^https?:\/\/(localhost|127\.0\.0\.1)/.test(window.location.origin);
@@ -86,103 +86,54 @@ export default function PinLogin({ onLogin }) {
     setError('');
   };
 
-  // OAuth 2.0 PKCE helpers
-  const base64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-
-  const generatePkce = async () => {
-    const v = new Uint8Array(32);
-    crypto.getRandomValues(v);
-    const verifier = base64url(v);
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-    return { verifier, challenge: base64url(digest) };
-  };
-
-  // Start Google OAuth redirect flow (mobile-friendly, no popup)
-  const handleGoogleLogin = async () => {
-    setGoogleLoading(true);
-    setError('');
-    try {
-      const { verifier, challenge } = await generatePkce();
-      const stateBytes = new Uint8Array(16);
-      crypto.getRandomValues(stateBytes);
-      const state = base64url(stateBytes);
-      sessionStorage.setItem('ccr-pkce-verifier', verifier);
-      sessionStorage.setItem('ccr-pkce-state', state);
-      const redirectUri = window.location.origin + window.location.pathname;
-      sessionStorage.setItem('ccr-pkce-redirect', redirectUri);
-      const params = new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        redirect_uri: redirectUri,
-        response_type: 'code',
-        scope: 'openid email',
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-        state,
-        prompt: 'select_account',
-      });
-      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-    } catch (err) {
-      setError('認証開始に失敗: ' + err.message);
-      setGoogleLoading(false);
-    }
-  };
-
-  // Handle OAuth redirect return
+  // Initialize Google Identity Services when no session yet
   useEffect(() => {
-    const url = new URL(window.location.href);
-    const errParam = url.searchParams.get('error');
-    const code = url.searchParams.get('code');
-    const state = url.searchParams.get('state');
-
-    if (errParam) {
-      setError('Google認証キャンセル: ' + errParam);
-      ['error', 'error_description', 'state'].forEach(k => url.searchParams.delete(k));
-      window.history.replaceState({}, '', url.toString());
-      return;
-    }
-    if (!code || !state) return;
-
-    const savedState = sessionStorage.getItem('ccr-pkce-state');
-    const verifier = sessionStorage.getItem('ccr-pkce-verifier');
-    const redirectUri = sessionStorage.getItem('ccr-pkce-redirect');
-    ['code', 'state', 'scope', 'authuser', 'prompt', 'hd'].forEach(k => url.searchParams.delete(k));
-    window.history.replaceState({}, '', url.toString());
-
-    if (!savedState || state !== savedState || !verifier || !redirectUri) {
-      setError('OAuth state/verifier 不整合 — もう一度お試しください');
-      return;
-    }
-    sessionStorage.removeItem('ccr-pkce-state');
-    sessionStorage.removeItem('ccr-pkce-verifier');
-    sessionStorage.removeItem('ccr-pkce-redirect');
-
-    const base = getApiBase();
-    setGoogleLoading(true);
-    fetch(`${base}/auth/google-code`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }),
-    })
-      .then(async r => {
-        if (!r.ok) {
-          const d = await r.json().catch(() => ({}));
-          throw new Error(d.error || 'Google認証に失敗しました');
-        }
-        return r.json();
-      })
-      .then(data => {
-        localStorage.setItem('ccr-google-session', data.session);
-        setGoogleSession(data.session);
-        setError('');
-        setGoogleLoading(false);
-      })
-      .catch(err => {
-        setError(err.message);
-        setGoogleLoading(false);
-        try { soundError(); } catch {}
+    if (googleSession) return;
+    let cancelled = false;
+    const tryInit = () => {
+      if (cancelled) return;
+      if (!window.google?.accounts?.id || !googleBtnRef.current) {
+        setTimeout(tryInit, 200);
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        use_fedcm_for_prompt: true,
+        itp_support: true,
+        callback: async (response) => {
+          try {
+            const base = getApiBase();
+            const res = await fetch(`${base}/auth/google`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ credential: response.credential }),
+            });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || 'Google認証に失敗しました');
+            }
+            const data = await res.json();
+            localStorage.setItem('ccr-google-session', data.session);
+            setGoogleSession(data.session);
+            setError('');
+          } catch (err) {
+            setError(err.message);
+            try { soundError(); } catch {}
+          }
+        },
       });
-  }, []);
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'rectangular',
+        locale: 'ja',
+        width: 260,
+      });
+    };
+    tryInit();
+    return () => { cancelled = true; };
+  }, [googleSession]);
 
   // Auto-submit PIN when fully entered
   useEffect(() => {
@@ -333,24 +284,7 @@ export default function PinLogin({ onLogin }) {
               ! ERROR: {error}
             </div>
           )}
-          <button
-            type="button"
-            onClick={handleGoogleLogin}
-            disabled={googleLoading}
-            className="w-full flex items-center justify-center gap-2 py-3 rounded-lg font-bold text-sm font-pixel tracking-wider neon-btn text-txt-bright shadow-neon-blue disabled:opacity-30"
-          >
-            {googleLoading ? 'CONNECTING...' : (
-              <>
-                <svg width="18" height="18" viewBox="0 0 18 18" className="flex-shrink-0">
-                  <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-                  <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                  <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
-                  <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
-                </svg>
-                Googleでログイン
-              </>
-            )}
-          </button>
+          <div ref={googleBtnRef} className="flex justify-center" />
           <div className="text-txt-muted/40 text-center text-[10px] mt-4 font-mono">
             v4.0 // Google + PIN
           </div>
