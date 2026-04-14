@@ -596,12 +596,31 @@ export async function start() {
   app.listen(PORT, async () => {
     console.log(`[Server] CC Remote v4 起動: http://localhost:${PORT}`);
 
-    // v4: トンネル URL 変化を global.tunnelUrl に反映 + QR 再表示
-    // （中央レジストリへの再登録は廃止、各PCは独立P2P）
+    // ChatWork にトンネル URL を通知する共通ヘルパ
+    const notifyTunnelUrl = (url, title) => {
+      try {
+        const CW_TOKEN = process.env.CHATWORK_TOKEN;
+        const CW_ROOM = process.env.CHATWORK_ROOM_ID;
+        if (!CW_TOKEN || !CW_ROOM) return;
+        const body = `body=${encodeURIComponent(`[info][title]${title}[/title]${url}[/info]`)}`;
+        const req = https.request({
+          hostname: 'api.chatwork.com',
+          path: `/v2/rooms/${CW_ROOM}/messages`,
+          method: 'POST',
+          headers: { 'X-ChatWorkToken': CW_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' }
+        }, (res) => { console.log(`[Chatwork] 送信完了 (${res.statusCode})`); });
+        req.on('error', (err) => console.log(`[Chatwork] 送信失敗: ${err.message}`));
+        req.write(body);
+        req.end();
+      } catch (e) { console.log(`[Chatwork] 通知エラー: ${e.message}`); }
+    };
+
+    // v4: トンネル URL 変化を global.tunnelUrl に反映 + QR 再表示 + ChatWork 通知
     onTunnelUrlChange(async (newUrl) => {
       console.log(`[Server] トンネルURL変化検出: ${newUrl}`);
       global.tunnelUrl = newUrl;
       await printQR(newUrl).catch(() => {});
+      notifyTunnelUrl(newUrl, 'CC Remote v4 トンネルURL更新');
     });
 
     // Cloudflareトンネル自動起動
@@ -612,23 +631,8 @@ export async function start() {
       // 起動時 QR 表示（スマホからの初回接続用）
       await printQR(tunnelUrl).catch(() => {});
       console.log(`[Server] トンネルURL: ${tunnelUrl}`);
-      // Chatwork通知 (https is imported at the top of the file)
-      try {
-        const CW_TOKEN = process.env.CHATWORK_TOKEN;
-        const CW_ROOM = process.env.CHATWORK_ROOM_ID;
-        if (CW_TOKEN && CW_ROOM) {
-          const body = `body=${encodeURIComponent(`[info][title]CC Remote v3 トンネルURL[/title]${tunnelUrl}[/info]`)}`;
-          const req = https.request({
-            hostname: 'api.chatwork.com',
-            path: `/v2/rooms/${CW_ROOM}/messages`,
-            method: 'POST',
-            headers: { 'X-ChatWorkToken': CW_TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' }
-          }, (res) => { console.log(`[Chatwork] 送信完了 (${res.statusCode})`); });
-          req.on('error', (err) => console.log(`[Chatwork] 送信失敗: ${err.message}`));
-          req.write(body);
-          req.end();
-        }
-      } catch (e) { console.log(`[Chatwork] 通知エラー: ${e.message}`); }
+      // Chatwork通知（ヘルパ経由で起動時 URL を送信）
+      notifyTunnelUrl(tunnelUrl, 'CC Remote v4 トンネルURL');
     }
   });
 }
