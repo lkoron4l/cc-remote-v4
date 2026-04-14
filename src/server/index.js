@@ -596,13 +596,15 @@ export async function start() {
   app.listen(PORT, async () => {
     console.log(`[Server] CC Remote v4 起動: http://localhost:${PORT}`);
 
-    // ChatWork にトンネル URL を通知する共通ヘルパ
+    // ChatWork にトンネル URL を通知する共通ヘルパ（PWA URL も併記）
+    const PWA_URL = 'https://innovationinnovation8.github.io/cc-remote-v4/';
     const notifyTunnelUrl = (url, title) => {
       try {
         const CW_TOKEN = process.env.CHATWORK_TOKEN;
         const CW_ROOM = process.env.CHATWORK_ROOM_ID;
         if (!CW_TOKEN || !CW_ROOM) return;
-        const body = `body=${encodeURIComponent(`[info][title]${title}[/title]${url}[/info]`)}`;
+        const msg = `アプリ: ${PWA_URL}\nPC接続URL: ${url}`;
+        const body = `body=${encodeURIComponent(`[info][title]${title}[/title]${msg}[/info]`)}`;
         const req = https.request({
           hostname: 'api.chatwork.com',
           path: `/v2/rooms/${CW_ROOM}/messages`,
