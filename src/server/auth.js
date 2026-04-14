@@ -210,6 +210,54 @@ authRoutes.post('/google', async (req, res) => {
   }
 });
 
+// OAuth 2.0 Authorization Code + PKCE — mobile-friendly redirect flow
+authRoutes.post('/google-code', async (req, res) => {
+  const { code, code_verifier, redirect_uri } = req.body || {};
+  if (!code || !code_verifier || !redirect_uri) {
+    return res.status(400).json({ error: 'code/code_verifier/redirect_uriが必要です' });
+  }
+  try {
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: GOOGLE_CLIENT_ID,
+        redirect_uri,
+        grant_type: 'authorization_code',
+        code_verifier,
+      }).toString(),
+    });
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      console.error('[Auth] Token exchange failed:', errText);
+      return res.status(401).json({ error: 'トークン交換に失敗しました' });
+    }
+    const tokens = await tokenRes.json();
+    if (!tokens.id_token) {
+      return res.status(401).json({ error: 'id_token が取得できません' });
+    }
+    const ticket = await googleClient.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const email = String(payload?.email || '').toLowerCase();
+    if (!email || !payload?.email_verified) {
+      return res.status(401).json({ error: 'メール認証が確認できません' });
+    }
+    if (!ALLOWED_EMAILS.includes(email)) {
+      return res.status(403).json({ error: 'このアカウントは許可されていません' });
+    }
+    const session = generateToken();
+    googleSessions.set(session, { email, createdAt: Date.now() });
+    res.json({ ok: true, session, email });
+  } catch (err) {
+    console.error('[Auth] Google code flow failed:', err.message);
+    res.status(401).json({ error: 'Google認証に失敗しました' });
+  }
+});
+
 export function isGoogleSessionValid(session) {
   if (!session || !googleSessions.has(session)) return false;
   const { createdAt } = googleSessions.get(session);
