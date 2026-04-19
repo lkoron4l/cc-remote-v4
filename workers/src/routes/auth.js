@@ -8,6 +8,7 @@
 import { buildAuthUrl, exchangeCode, verifyIdToken, hashEmail } from '../auth/google.js';
 import { signState, verifyState } from '../auth/state.js';
 import { buildSessionCookie, buildClearCookie, parseSessionCookie, validateOriginCsrf } from '../auth/cookie.js';
+import { generateLinkTicket } from '../lib/hmac.js';
 
 /**
  * GET /api/auth/google
@@ -185,7 +186,8 @@ export async function handleAuthCallback(request, env) {
       new Request('http://do/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: session_token, email_hash }),
+        // email も plain で保存（link-ticket 発行時に PC 側 ALLOWED_EMAILS 判定に使う）
+        body: JSON.stringify({ token: session_token, email_hash, email }),
       })
     );
   } catch (err) {
@@ -259,4 +261,83 @@ export async function handleAuthLogout(request, env) {
     },
     status: 200,
   });
+}
+
+/**
+ * POST /api/auth/link-ticket
+ *
+ * 案1: dispatcher Cookie を信頼の元に、各PCへ引き継ぐ HMAC 署名済みチケットを発行する。
+ * body: { pc_id }
+ * 認証: session Cookie 必須 + Origin CSRF チェック（POST のため）
+ *
+ * レスポンス:
+ *   200: { ok: true, ticket, exp }
+ *   400: 不正 pc_id
+ *   401: Cookie 未提示 or 期限切れ
+ *   403: Origin 不一致 or email 無し
+ *   500/503: 設定不備
+ *
+ * @param {Request} request
+ * @param {object} env
+ * @returns {Promise<Response>}
+ */
+export async function handleLinkTicket(request, env) {
+  // 1. CSRF: Origin 検証（POST なので必須）
+  const allowedOrigins = (env.ALLOWED_ORIGINS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  if (allowedOrigins.length === 0 || !validateOriginCsrf(request, allowedOrigins)) {
+    return Response.json({ error: 'forbidden: origin not allowed' }, { status: 403 });
+  }
+
+  // 2. HMAC_SECRET 必須
+  if (!env.HMAC_SECRET) {
+    return Response.json({ error: 'server misconfiguration' }, { status: 500 });
+  }
+
+  // 3. Cookie からセッション取得
+  const token = parseSessionCookie(request.headers.get('Cookie'));
+  if (!token || !env.SESSION_STORE) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  // 4. SessionStore で token → email を取り出す
+  let sessionRecord;
+  try {
+    const doId = env.SESSION_STORE.idFromName('global');
+    const stub = env.SESSION_STORE.get(doId);
+    const sessResp = await stub.fetch(
+      new Request(`http://do/get?token=${encodeURIComponent(token)}`, { method: 'GET' })
+    );
+    if (!sessResp.ok) {
+      return Response.json({ error: 'unauthorized' }, { status: 401 });
+    }
+    const data = await sessResp.json();
+    sessionRecord = data.session;
+  } catch {
+    return Response.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  if (!sessionRecord || !sessionRecord.email) {
+    // 2026-04-17 以前に作られた session には email が無い → OAuth 再ログインで再発行を促す
+    return Response.json({ error: 'session missing email; re-login required' }, { status: 403 });
+  }
+
+  // 5. body から pc_id
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'invalid JSON body' }, { status: 400 });
+  }
+  const pc_id = body && typeof body.pc_id === 'string' ? body.pc_id.trim() : '';
+  if (!pc_id) {
+    return Response.json({ error: 'pc_id is required' }, { status: 400 });
+  }
+
+  // 6. HMAC チケット発行（pc_id|email|exp、2分TTL）
+  const { ticket, exp } = await generateLinkTicket(
+    { pc_id, email: sessionRecord.email },
+    env.HMAC_SECRET,
+  );
+  return Response.json({ ok: true, ticket, exp });
 }

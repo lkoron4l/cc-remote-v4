@@ -10,7 +10,7 @@ import os from 'os';
 import https from 'https';
 import { checkFirstRun, runFirstTimeSetup, runFirstTimeSetupCLI } from './first-run.js';
 import { initDB } from './db.js';
-import { authMiddleware, authRoutes } from './auth.js';
+import { authMiddleware, authRoutes, reloadAuthFromDB } from './auth.js';
 import { sessionRoutes } from './sessions.js';
 import { sseRoutes } from './sse.js';
 import { chatworkRoutes } from './chatwork.js';
@@ -588,6 +588,9 @@ app.get('/{*path}', (req, res) => {
 
 export async function start() {
   await initDB();
+  // 段階1+2: 永続化済みの Google session / auth token を DB から復元
+  //   (auth.js の import 時点では DB 未初期化のため改めて呼び直す)
+  reloadAuthFromDB();
   initSleepControl();
   // 自走化対応: 起動時点で自動スリープ無効化（3PC並列自走の前提条件）
   // CC_REMOTE_NO_AUTO_SLEEP_DISABLE=1 で無効化可能
@@ -608,13 +611,15 @@ export async function start() {
     console.log(`[Server] CC Remote v4 起動: http://localhost:${PORT}`);
 
     // ChatWork にトンネル URL を通知する共通ヘルパ（PWA URL も併記）
-    const PWA_URL = 'https://innovationinnovation8.github.io/cc-remote-v4/';
+    const PWA_URL = 'https://cc-remote.innovationinnovation8.workers.dev';
     const notifyTunnelUrl = (url, title) => {
       try {
         const CW_TOKEN = process.env.CHATWORK_TOKEN;
         const CW_ROOM = process.env.CHATWORK_ROOM_ID;
         if (!CW_TOKEN || !CW_ROOM) return;
-        const msg = `アプリ: ${PWA_URL}\nPC接続URL: ${url}`;
+        // 2026-04-17: 旧 GitHub Pages URL + 毎回変わる trycloudflare URL を削除し、
+        // 固定の Workers Dispatcher URL のみを送るようにした。url 引数は heartbeat 用に残してある。
+        const msg = `アプリ: ${PWA_URL}`;
         const body = `body=${encodeURIComponent(`[info][title]${title}[/title]${msg}[/info]`)}`;
         const req = https.request({
           hostname: 'api.chatwork.com',

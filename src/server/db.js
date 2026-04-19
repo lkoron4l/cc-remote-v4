@@ -88,6 +88,21 @@ export async function initDB() {
     )
   `);
 
+  // 段階1+2: Google セッションと PIN トークンを永続化（PC再起動・ブラウザ再起動を超えて保持）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS google_sessions (
+      token TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+      token TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL
+    )
+  `);
+
   // Rev 6: スケジュールテーブル (cron or 単発 datetime で PC Claude に指示投入)
   //   kind: 'once' | 'cron'
   //   trigger_at: ミリ秒 UTC (once のとき) / cron 式 (cron のとき)

@@ -73,6 +73,62 @@ export async function generateToken(pcId, secret, now = Date.now()) {
   return { token, expires_at };
 }
 
+// ---------------------------------------------------------------------------
+// Dispatcher → PC link ticket（案1: dispatcher Cookie を信頼の元に PC へ引き継ぐ）
+//
+// payload = base64url(JSON.stringify({pc_id, email, exp}))
+// sig     = base64url(HMAC-SHA256(key=secret, data=payload))
+// ticket  = payload + "." + sig
+//
+// 既存の generateToken/verifyToken とは payload 形式が異なる（JSON 多フィールド）。
+// pc_id を埋め込むことで「別PCへのリプレイ」を署名検証の段階で弾く。
+// TTL は短め（2分）。PC側はさらにワンショット消費で 5分以内のリプレイも塞ぐ。
+// ---------------------------------------------------------------------------
+const LINK_TICKET_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * dispatcher-link ticket を生成する
+ * @param {{pc_id: string, email: string}} claims
+ * @param {string} secret  env.HMAC_SECRET（PC の /connect・heartbeat と共有）
+ * @param {number} [now]
+ * @returns {Promise<{ ticket: string, exp: number }>}
+ */
+export async function generateLinkTicket(claims, secret, now = Date.now()) {
+  const exp = now + LINK_TICKET_TTL_MS;
+  const payloadObj = { pc_id: String(claims.pc_id), email: String(claims.email).toLowerCase(), exp };
+  const payload = bufToBase64url(encoder.encode(JSON.stringify(payloadObj)));
+  const key = await importKey(secret);
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  return { ticket: `${payload}.${bufToBase64url(sig)}`, exp };
+}
+
+/**
+ * dispatcher-link ticket を検証する（Workers 側テスト用、PC 側は Node 版で検証する）
+ */
+export async function verifyLinkTicket(ticket, secret, now = Date.now()) {
+  if (!ticket || typeof ticket !== 'string') return null;
+  const parts = ticket.split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sigStr] = parts;
+  let decoded;
+  try {
+    decoded = JSON.parse(new TextDecoder().decode(base64urlToUint8Array(payload)));
+  } catch {
+    return null;
+  }
+  if (!decoded || !decoded.pc_id || !decoded.email || !decoded.exp) return null;
+  if (now > decoded.exp) return null;
+  try {
+    const key = await importKey(secret);
+    const sigBytes = base64urlToUint8Array(sigStr);
+    const valid = await crypto.subtle.verify('HMAC', key, sigBytes, encoder.encode(payload));
+    if (!valid) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * HMAC トークンを検証する
  * @param {string} token

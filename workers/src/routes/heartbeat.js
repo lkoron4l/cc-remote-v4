@@ -1,11 +1,12 @@
 /**
  * POST /api/heartbeat
  *
- * リクエスト body: { pcId, workers_token, tunnel_url, email_hash? }
+ * リクエスト body: { pcId, workers_token, tunnel_url, email_hash?, label? }
  *   - pcId: PC識別子
  *   - workers_token: HMAC-SHA256 トークン（generateToken で生成）
  *   - tunnel_url: 現在のトンネル URL
  *   - email_hash: SHA-256 ハッシュ済みメールアドレス（初回登録/更新用、省略可）
+ *   - label: 表示用 PC 名（省略可、更新時に反映）
  *
  * 処理フロー:
  *   1. HMAC トークン検証（失敗 → 401）
@@ -29,7 +30,7 @@ export async function handleHeartbeat(request, env) {
     return Response.json({ error: 'invalid JSON body' }, { status: 400 });
   }
 
-  const { pcId, workers_token, tunnel_url, email_hash } = body;
+  const { pcId, workers_token, tunnel_url, email_hash, label } = body;
 
   if (!pcId || !workers_token || !tunnel_url) {
     return Response.json(
@@ -60,7 +61,7 @@ export async function handleHeartbeat(request, env) {
       new Request('http://do/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pcId, tunnel_url, email_hash }),
+        body: JSON.stringify({ pcId, tunnel_url, email_hash, ...(label ? { label } : {}) }),
       })
     );
     if (!regResp.ok) {
@@ -75,7 +76,7 @@ export async function handleHeartbeat(request, env) {
     new Request('http://do/heartbeat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pcId, tunnel_url }),
+      body: JSON.stringify({ pcId, tunnel_url, ...(label ? { label } : {}) }),
     })
   );
 

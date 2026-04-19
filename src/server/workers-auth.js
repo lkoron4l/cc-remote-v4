@@ -48,10 +48,11 @@ export function generateWorkersToken(pcId, pcSecret, now = Date.now()) {
  * @param {string} opts.pcSecret        HMAC シークレット（env.HMAC_SECRET と同値）
  * @param {string} opts.emailHash       SHA-256 ハッシュ済みメールアドレス
  * @param {string} [opts.pcUrl]         トンネル URL（省略可）
+ * @param {string} [opts.label]         表示用 PC 名（省略可）
  * @returns {Promise<{ ok: true }>}
  * @throws {Error} HTTP エラーまたはネットワークエラー時
  */
-export async function connectToWorkers({ dispatcherUrl, pcId, pcSecret, emailHash, pcUrl }) {
+export async function connectToWorkers({ dispatcherUrl, pcId, pcSecret, emailHash, pcUrl, label }) {
   const { token } = generateWorkersToken(pcId, pcSecret);
 
   const body = {
@@ -60,6 +61,7 @@ export async function connectToWorkers({ dispatcherUrl, pcId, pcSecret, emailHas
     workers_token: token,
   };
   if (pcUrl) body.pc_url = pcUrl;
+  if (label) body.label = label;
 
   const resp = await fetch(`${dispatcherUrl}/api/connect`, {
     method: 'POST',

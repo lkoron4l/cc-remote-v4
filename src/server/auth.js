@@ -1,13 +1,7 @@
 // PIN Authentication — CC Remote v4 (P2P, no central auth)
-// v4 changes vs v3:
-//   - Firebase Admin / verifyIdToken / Google login removed
-//   - Central server token verification (CLOUD_SERVER_URL) removed
-//   - WebAuthn routes removed (retired in v4 MVP — see .trash/_20260413_v4_start/webauthn-snippet.js)
-//   - allowed_uids store removed
-//   - /api/auth/google removed
-//   - /api/auth/remote-verify removed (v4 has no inter-PC validation)
-//   - PIN minimum length 4 -> 8 (North Star: PIN 8 桁以上)
-//   - authMiddleware: x-pin only
+// 2026-04-17: 段階1+2 実装。Google session + PIN token を SQLite に永続化し、
+// 信頼端末モード ON 時は Google 認証成功で自動的に PIN を省略して token も同時発行する。
+// 既存の Map ベースキャッシュは互換のため残してある（DB 不在時も動く）。
 import { Router } from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
@@ -32,13 +26,103 @@ if (ALLOWED_EMAILS.length === 0) {
   console.warn('[auth] ALLOWED_EMAILS is empty — all Google logins will be rejected. Set ALLOWED_EMAILS in .env');
 }
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
-const googleSessions = new Map();
-const GOOGLE_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-// In-memory token store: token -> creation timestamp (ms)
+// 案1 (2026-04-17): Workers Dispatcher からの link-ticket 引き継ぎ用
+// 同一プロセス内のワンショット消費 Set（TTL 5分を超えた entry は lazy 掃除）。
+// サーバー再起動で揮発するが、ticket 自体が 2分TTL なのでそれ以上前の ticket は
+// どのみち HMAC 検証で expired により弾かれる。
+const HMAC_SECRET_RAW = process.env.HMAC_SECRET || '';
+const usedLinkTickets = new Map(); // sig -> createdAt
+const USED_LINK_TICKET_TTL_MS = 5 * 60 * 1000;
+const PC_ID_FOR_LINK = process.env.PC_ID || '';
+
+// In-memory cache (DB ロード後に同期)。Map のままアクセスする既存コードを壊さないため残す。
+const googleSessions = new Map();
 const activeTokens = new Map();
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const GOOGLE_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30日（Google ログインは30日無音）
+const TOKEN_TTL_MS = 60 * 60 * 1000;                    // 1時間（PINは1時間ごとに再入力させる方針）
 const PIN_MIN_LENGTH = 4;
+
+// 信頼端末モード（デフォルト ON）。settings テーブルの 'trusted_device_mode' に 'true'/'false' で保存。
+const TRUSTED_DEVICE_MODE_KEY = 'trusted_device_mode';
+
+// ---------------------------------------------------------------------------
+// Persistence helpers — DB 操作で例外が起きても認証フロー本体を止めない
+// ---------------------------------------------------------------------------
+function safeDb(fn) {
+  try { return fn(getDB()); } catch (e) { console.warn('[auth] DB access failed:', e.message); return null; }
+}
+
+function loadGoogleSessionsFromDB() {
+  safeDb((db) => {
+    const result = db.exec('SELECT token, email, created_at FROM google_sessions');
+    if (!result.length) return;
+    const now = Date.now();
+    for (const row of result[0].values) {
+      const [token, email, createdAt] = row;
+      if (now - createdAt <= GOOGLE_SESSION_TTL_MS) {
+        googleSessions.set(token, { email, createdAt });
+      }
+    }
+    console.log(`[auth] Google session 復元: ${googleSessions.size}件`);
+  });
+}
+
+function loadActiveTokensFromDB() {
+  safeDb((db) => {
+    const result = db.exec('SELECT token, created_at FROM auth_tokens');
+    if (!result.length) return;
+    const now = Date.now();
+    for (const row of result[0].values) {
+      const [token, createdAt] = row;
+      if (now - createdAt <= TOKEN_TTL_MS) {
+        activeTokens.set(token, createdAt);
+      }
+    }
+    console.log(`[auth] Auth token 復元: ${activeTokens.size}件`);
+  });
+}
+
+function persistGoogleSession(token, email, createdAt) {
+  safeDb((db) => {
+    db.run('INSERT OR REPLACE INTO google_sessions (token, email, created_at) VALUES (?, ?, ?)', [token, email, createdAt]);
+    saveDB();
+  });
+}
+
+function persistActiveToken(token, createdAt) {
+  safeDb((db) => {
+    db.run('INSERT OR REPLACE INTO auth_tokens (token, created_at) VALUES (?, ?)', [token, createdAt]);
+    saveDB();
+  });
+}
+
+function deleteGoogleSession(token) {
+  safeDb((db) => {
+    db.run('DELETE FROM google_sessions WHERE token = ?', [token]);
+    saveDB();
+  });
+}
+
+function deleteActiveToken(token) {
+  safeDb((db) => {
+    db.run('DELETE FROM auth_tokens WHERE token = ?', [token]);
+    saveDB();
+  });
+}
+
+function purgeExpiredFromDB() {
+  safeDb((db) => {
+    const now = Date.now();
+    db.run('DELETE FROM google_sessions WHERE ? - created_at > ?', [now, GOOGLE_SESSION_TTL_MS]);
+    db.run('DELETE FROM auth_tokens WHERE ? - created_at > ?', [now, TOKEN_TTL_MS]);
+    saveDB();
+  });
+}
+
+// 起動時のロード（initDB 完了後に呼ばれる前提だが、未初期化なら safeDb が黙ってスキップする）
+loadGoogleSessionsFromDB();
+loadActiveTokensFromDB();
 
 // ---------------------------------------------------------------------------
 // PIN hashing (scrypt with SHA-256 legacy fallback for migration)
@@ -77,6 +161,20 @@ function getSettingsValue(key) {
   }
 }
 
+function setSettingsValue(key, value) {
+  safeDb((db) => {
+    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [key, value]);
+    saveDB();
+  });
+}
+
+function getTrustedDeviceMode() {
+  // デフォルト OFF。PIN を 1時間ごとに 1 回入れさせる方針に変更したため。
+  // 明示的に 'true' を入れた端末だけ「Google認証成功で PIN も省略」になる。
+  const v = getSettingsValue(TRUSTED_DEVICE_MODE_KEY);
+  return v === 'true';
+}
+
 function getStoredPin() {
   return getSettingsValue('pin_hash'); // "salt:hash"
 }
@@ -85,12 +183,7 @@ function storePin(pin) {
   const salt = generateSalt();
   const hash = hashPin(pin, salt);
   const value = `${salt}:${hash}`;
-  const db = getDB();
-  db.run(
-    "INSERT OR REPLACE INTO settings (key, value) VALUES ('pin_hash', ?)",
-    [value]
-  );
-  saveDB();
+  setSettingsValue('pin_hash', value);
 }
 
 function verifyPin(pin) {
@@ -111,9 +204,29 @@ function isTokenActive(token) {
   const createdAt = activeTokens.get(token);
   if (Date.now() - createdAt > TOKEN_TTL_MS) {
     activeTokens.delete(token);
+    deleteActiveToken(token);
     return false;
   }
   return true;
+}
+
+function isGoogleSessionValidInternal(session) {
+  if (!session || !googleSessions.has(session)) return false;
+  const { createdAt } = googleSessions.get(session);
+  if (Date.now() - createdAt > GOOGLE_SESSION_TTL_MS) {
+    googleSessions.delete(session);
+    deleteGoogleSession(session);
+    return false;
+  }
+  return true;
+}
+
+function issueAuthToken() {
+  const token = generateToken();
+  const now = Date.now();
+  activeTokens.set(token, now);
+  persistActiveToken(token, now);
+  return token;
 }
 
 setInterval(() => {
@@ -121,6 +234,10 @@ setInterval(() => {
   for (const [token, createdAt] of activeTokens) {
     if (now - createdAt > TOKEN_TTL_MS) activeTokens.delete(token);
   }
+  for (const [s, { createdAt }] of googleSessions) {
+    if (now - createdAt > GOOGLE_SESSION_TTL_MS) googleSessions.delete(s);
+  }
+  purgeExpiredFromDB();
 }, 60 * 60 * 1000);
 
 function isAuthenticated(req) {
@@ -134,9 +251,17 @@ function isAuthenticated(req) {
 
 authRoutes.get('/status', (req, res) => {
   const hasPin = getStoredPin() !== null;
+  // 段階1: クライアントが ?session=xxx で問い合わせ → Google session が生きてるか返す
+  const querySession = typeof req.query?.session === 'string' ? req.query.session : '';
+  const googleSessionValid = querySession ? isGoogleSessionValidInternal(querySession) : false;
+  // PINログイン画面で「どのPCに入ろうとしてるか」を出すための識別ラベル
+  const pcLabel = process.env.PC_LABEL || process.env.PC_NAME || '';
   res.json({
     hasPin,
     isAuthenticated: isAuthenticated(req),
+    googleSessionValid,
+    trustedDeviceMode: getTrustedDeviceMode(),
+    pcLabel,
   });
 });
 
@@ -149,8 +274,7 @@ authRoutes.post('/setup', (req, res) => {
     return res.status(409).json({ error: 'PINはすでに設定されています' });
   }
   storePin(pin);
-  const token = generateToken();
-  activeTokens.set(token, Date.now());
+  const token = issueAuthToken();
   res.json({ ok: true, token });
 });
 
@@ -165,8 +289,7 @@ authRoutes.post('/login', loginLimiter, (req, res) => {
   if (!verifyPin(pin)) {
     return res.status(401).json({ error: 'PINが正しくありません' });
   }
-  const token = generateToken();
-  activeTokens.set(token, Date.now());
+  const token = issueAuthToken();
   res.json({ token });
 });
 
@@ -185,18 +308,25 @@ authRoutes.post('/change-pin', (req, res) => {
     return res.status(401).json({ error: '現在のPINが正しくありません' });
   }
   storePin(newPin);
+  // PIN 変更時は全 token を無効化（DB側も全削除）
   activeTokens.clear();
+  safeDb((db) => { db.run('DELETE FROM auth_tokens'); saveDB(); });
   res.json({ ok: true });
 });
 
 authRoutes.post('/logout', (req, res) => {
   const token = req.headers['x-pin'];
-  if (token) activeTokens.delete(token);
+  if (token) {
+    activeTokens.delete(token);
+    deleteActiveToken(token);
+  }
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
-// Google OAuth — verifies ID Token from GIS, gates PC registration by email
+// Google OAuth — verifies ID Token from GIS, gates PC registration by email.
+// 段階1+2: Google session を SQLite に永続化。
+// trustedDeviceMode ON のときは PIN を省略して token も同時発行する。
 // ---------------------------------------------------------------------------
 authRoutes.post('/google', async (req, res) => {
   const { credential } = req.body || {};
@@ -215,30 +345,152 @@ authRoutes.post('/google', async (req, res) => {
       return res.status(403).json({ error: 'このアカウントは許可されていません' });
     }
     const session = generateToken();
-    googleSessions.set(session, { email, createdAt: Date.now() });
-    res.json({ ok: true, session, email });
+    const now = Date.now();
+    googleSessions.set(session, { email, createdAt: now });
+    persistGoogleSession(session, email, now);
+
+    // 信頼端末モード ON なら同時に auth token も発行 → クライアントは PIN 画面をスキップ可能
+    let token = null;
+    const trustedDeviceMode = getTrustedDeviceMode();
+    if (trustedDeviceMode) {
+      token = issueAuthToken();
+    }
+
+    res.json({ ok: true, session, email, token, trustedDeviceMode });
   } catch (err) {
     console.error('[Auth] Google verify failed:', err.message);
     res.status(401).json({ error: 'Google認証に失敗しました' });
   }
 });
 
-export function isGoogleSessionValid(session) {
-  if (!session || !googleSessions.has(session)) return false;
-  const { createdAt } = googleSessions.get(session);
-  if (Date.now() - createdAt > GOOGLE_SESSION_TTL_MS) {
-    googleSessions.delete(session);
-    return false;
+// 段階1: 既存の Google session を IDB に持っているクライアントが
+// PIN を打たずに token を取り直すための「無音再ログイン」エンドポイント。
+authRoutes.post('/auto-login', (req, res) => {
+  const session = (req.body && req.body.session) || '';
+  if (!session || typeof session !== 'string') {
+    return res.status(400).json({ error: 'sessionが必要です' });
   }
-  return true;
+  if (!isGoogleSessionValidInternal(session)) {
+    return res.status(401).json({ error: 'Googleセッションが無効です' });
+  }
+  if (!getTrustedDeviceMode()) {
+    return res.status(403).json({ error: '信頼端末モードがOFFです' });
+  }
+  const token = issueAuthToken();
+  res.json({ ok: true, token });
+});
+
+// ---------------------------------------------------------------------------
+// 案1: Dispatcher Cookie 引き継ぎ — POST /api/auth/dispatcher-link
+// body: { ticket }
+// Workers が発行した HMAC 署名済みチケットを検証して google_session + token を発行。
+// ・payload = base64url(JSON.stringify({pc_id, email, exp}))
+// ・sig     = base64url(HMAC-SHA256(HMAC_SECRET, payload))
+// ・TTL は payload.exp（2分）、PC側で使用済み sig を 5分保持してリプレイを封じる
+// ---------------------------------------------------------------------------
+
+function base64urlDecodeToBuffer(str) {
+  if (typeof str !== 'string') throw new Error('not a string');
+  const padded = str.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = (4 - (padded.length % 4)) % 4;
+  return Buffer.from(padded + '='.repeat(pad), 'base64');
 }
 
-setInterval(() => {
+function verifyLinkTicketNode(ticket, secret) {
+  if (!ticket || typeof ticket !== 'string') return null;
+  const parts = ticket.split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sigStr] = parts;
+  let claims;
+  try {
+    claims = JSON.parse(base64urlDecodeToBuffer(payload).toString('utf-8'));
+  } catch { return null; }
+  if (!claims || !claims.pc_id || !claims.email || !claims.exp) return null;
+  if (Date.now() > Number(claims.exp)) return null;
+
+  // HMAC-SHA256 再計算 & constant-time 比較
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest();
+  let actual;
+  try { actual = base64urlDecodeToBuffer(sigStr); } catch { return null; }
+  if (expected.length !== actual.length) return null;
+  if (!crypto.timingSafeEqual(expected, actual)) return null;
+  return { claims, sig: sigStr };
+}
+
+function purgeUsedTickets() {
   const now = Date.now();
-  for (const [s, { createdAt }] of googleSessions) {
-    if (now - createdAt > GOOGLE_SESSION_TTL_MS) googleSessions.delete(s);
+  for (const [sig, createdAt] of usedLinkTickets) {
+    if (now - createdAt > USED_LINK_TICKET_TTL_MS) usedLinkTickets.delete(sig);
   }
-}, 60 * 60 * 1000);
+}
+
+authRoutes.post('/dispatcher-link', loginLimiter, (req, res) => {
+  if (!HMAC_SECRET_RAW) {
+    return res.status(500).json({ error: 'HMAC_SECRET 未設定' });
+  }
+  const ticket = req.body && typeof req.body.ticket === 'string' ? req.body.ticket : '';
+  if (!ticket) return res.status(400).json({ error: 'ticketが必要です' });
+
+  purgeUsedTickets();
+
+  const verified = verifyLinkTicketNode(ticket, HMAC_SECRET_RAW);
+  if (!verified) {
+    return res.status(401).json({ error: 'チケットが無効または期限切れです' });
+  }
+  const { claims, sig } = verified;
+
+  // pc_id 一致チェック（別PC向けチケットのリプレイ防止）
+  if (PC_ID_FOR_LINK && claims.pc_id !== PC_ID_FOR_LINK) {
+    return res.status(403).json({ error: 'このPC向けチケットではありません' });
+  }
+
+  // ALLOWED_EMAILS 二重チェック（dispatcher と PC で設定差があっても PC 側で確実に弾く）
+  const email = String(claims.email || '').toLowerCase();
+  if (!ALLOWED_EMAILS.includes(email)) {
+    return res.status(403).json({ error: 'このアカウントは許可されていません' });
+  }
+
+  // ワンショット消費（同じ ticket の再利用を禁止）
+  if (usedLinkTickets.has(sig)) {
+    return res.status(401).json({ error: 'チケットはすでに使用済みです' });
+  }
+  usedLinkTickets.set(sig, Date.now());
+
+  // 成功 → google session + auth token を発行
+  const session = generateToken();
+  const now = Date.now();
+  googleSessions.set(session, { email, createdAt: now });
+  persistGoogleSession(session, email, now);
+  const token = issueAuthToken();
+  res.json({ ok: true, session, token, email });
+});
+
+// 信頼端末モードの参照・切り替え（後日 Settings UI から触れるように）
+authRoutes.get('/trusted-mode', (req, res) => {
+  res.json({ enabled: getTrustedDeviceMode() });
+});
+
+authRoutes.post('/trusted-mode', (req, res) => {
+  if (!isAuthenticated(req)) {
+    return res.status(401).json({ error: '認証が必要です' });
+  }
+  const enabled = !!(req.body && req.body.enabled);
+  setSettingsValue(TRUSTED_DEVICE_MODE_KEY, enabled ? 'true' : 'false');
+  res.json({ ok: true, enabled });
+});
+
+// 既存の他モジュール（pc-control 等）から使われているので互換維持
+export function isGoogleSessionValid(session) {
+  return isGoogleSessionValidInternal(session);
+}
+
+// initDB 完了後に呼ばれる想定。起動順の都合で auth.js がロードされた時点では
+// DB が未初期化なため、index.js の initDB() 完了後に呼び戻して同期するためのフック。
+export function reloadAuthFromDB() {
+  loadGoogleSessionsFromDB();
+  loadActiveTokensFromDB();
+  purgeExpiredFromDB();
+}
 
 // ---------------------------------------------------------------------------
 // authMiddleware — v4: x-pin only (no Firebase, no central server)

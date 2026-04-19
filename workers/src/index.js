@@ -1,7 +1,8 @@
 import { handleHeartbeat } from './routes/heartbeat.js';
 import { handleConnect } from './routes/connect.js';
-import { handleAuthGoogle, handleAuthCallback, handleAuthLogout } from './routes/auth.js';
+import { handleAuthGoogle, handleAuthCallback, handleAuthLogout, handleLinkTicket } from './routes/auth.js';
 import { handleInviteCreate, handleInviteAccept } from './routes/invite.js';
+import { handleGetPcs } from './routes/pcs.js';
 
 // DO クラスを re-export（wrangler.toml の class_name と一致が必要）
 export { PCRegistry } from './do/pc-registry.js';
@@ -16,6 +17,30 @@ export default {
     // ヘルスチェック（/health は Cloudflare 内部予約のため /healthz を使用）
     if (pathname === '/healthz') {
       return Response.json({ ok: true, ts: Date.now() });
+    }
+
+    // Android TWA: Digital Asset Links for `com.ccremote.app`
+    // Content-Type must be application/json; HTTPS required; no redirect.
+    if (request.method === 'GET' && pathname === '/.well-known/assetlinks.json') {
+      const uploadSha256 = env.ANDROID_UPLOAD_SHA256 || '';
+      const playSha256 = env.ANDROID_PLAY_SHA256 || '';
+      const fingerprints = [uploadSha256, playSha256].filter(Boolean);
+      const body = [{
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: {
+          namespace: 'android_app',
+          package_name: 'com.ccremote.app',
+          sha256_cert_fingerprints: fingerprints,
+        },
+      }];
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=300',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
     }
 
     // POST /api/heartbeat
@@ -33,16 +58,9 @@ export default {
       return handleHeartbeat(request, env);
     }
 
-    // GET /api/pcs  — PC 一覧（email_hash でフィルタ、Week 3 で認証追加予定）
+    // GET /api/pcs  — PC 一覧（Cookie セッション認証必須）
     if (request.method === 'GET' && pathname === '/api/pcs') {
-      const email_hash = url.searchParams.get('email_hash');
-      const doId = env.PC_REGISTRY.idFromName('global');
-      const stub = env.PC_REGISTRY.get(doId);
-      const listUrl = email_hash
-        ? `http://do/list?email_hash=${encodeURIComponent(email_hash)}`
-        : 'http://do/list';
-      const resp = await stub.fetch(new Request(listUrl, { method: 'GET' }));
-      return resp;
+      return handleGetPcs(request, env);
     }
 
     // GET /api/auth/google — redirect to Google OAuth2 consent screen
@@ -60,6 +78,11 @@ export default {
       return handleAuthLogout(request, env);
     }
 
+    // POST /api/auth/link-ticket — Dispatcher Cookie から PC 引き継ぎチケット発行（案1）
+    if (request.method === 'POST' && pathname === '/api/auth/link-ticket') {
+      return handleLinkTicket(request, env);
+    }
+
     // POST /api/invite/create — 認証済みユーザーが招待URLを発行する
     if (request.method === 'POST' && pathname === '/api/invite/create') {
       return handleInviteCreate(request, env);
@@ -70,6 +93,14 @@ export default {
       return handleInviteAccept(request, env);
     }
 
+    // Workers Assets: 上記の API ルートにマッチしなければ静的ファイル配信へ。
+    // `not_found_handling = single-page-application` 指定済のため、
+    // 存在しないパスは index.html が返り、クライアント側 SPA ルーティングへ委譲される。
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
+    // ASSETS バインディング未設定（開発/ローカル）時のフォールバック
     return new Response('cc-remote-dispatcher', { status: 404 });
   },
 };

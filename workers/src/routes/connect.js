@@ -3,11 +3,12 @@
  *
  * PC が Workers に認証・登録するエンドポイント。
  *
- * リクエスト body: { pc_id, email_hash, workers_token, pc_url? }
+ * リクエスト body: { pc_id, email_hash, workers_token, pc_url?, label? }
  *   - pc_id: PC識別子
  *   - workers_token: HMAC-SHA256 トークン（PC側 workers-auth.js で生成）
  *   - email_hash: SHA-256 ハッシュ済みメールアドレス
  *   - pc_url: トンネル URL（省略可）
+ *   - label: 表示用 PC 名（省略可、os.hostname() フォールバック）
  *
  * HMAC シークレットモデル:
  *   shared HMAC_SECRET（env.HMAC_SECRET）を使用する。
@@ -40,7 +41,7 @@ export async function handleConnect(request, env) {
     return Response.json({ error: 'invalid JSON body' }, { status: 400 });
   }
 
-  const { pc_id, email_hash, workers_token, pc_url } = body;
+  const { pc_id, email_hash, workers_token, pc_url, label } = body;
 
   // 必須フィールドチェック
   if (!pc_id || !workers_token || !email_hash) {
@@ -75,6 +76,7 @@ export async function handleConnect(request, env) {
         pcId: pc_id,
         tunnel_url: pc_url || '',
         email_hash,
+        ...(label ? { label } : {}),
       }),
     })
   );

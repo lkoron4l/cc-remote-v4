@@ -49,11 +49,12 @@ function _hashEmail(email) {
 
 // --- heartbeat 送信 ---
 
-async function _sendHeartbeat(dispatcherUrl, pcId, secret, tunnelUrl, emailHash) {
+async function _sendHeartbeat(dispatcherUrl, pcId, secret, tunnelUrl, emailHash, label) {
   const { token } = _generateToken(pcId, secret);
 
   const body = { pcId, workers_token: token, tunnel_url: tunnelUrl };
   if (emailHash) body.email_hash = emailHash;
+  if (label) body.label = label;
 
   const resp = await fetch(`${dispatcherUrl}/api/heartbeat`, {
     method: 'POST',
@@ -79,6 +80,7 @@ async function _sendHeartbeat(dispatcherUrl, pcId, secret, tunnelUrl, emailHash)
  * @param {string} [opts.pcId]           省略時は process.env.PC_ID
  * @param {string} [opts.secret]         省略時は process.env.HMAC_SECRET
  * @param {string} [opts.email]          省略時は process.env.WORKERS_EMAIL（平文、内部でハッシュ化）
+ * @param {string} [opts.label]          表示用 PC 名（省略時は process.env.PC_LABEL || os.hostname()）
  * @param {Function} [opts.getTunnelUrl] global.tunnelUrl を返す関数
  */
 export function startWorkersHeartbeat(opts = {}) {
@@ -86,6 +88,7 @@ export function startWorkersHeartbeat(opts = {}) {
   const pcId = opts.pcId || process.env.PC_ID;
   const secret = opts.secret || process.env.HMAC_SECRET;
   const email = opts.email || process.env.WORKERS_EMAIL;
+  const label = opts.label || process.env.PC_LABEL || null;
   const getTunnelUrl = opts.getTunnelUrl || (() => global.tunnelUrl || null);
 
   if (!dispatcherUrl || !pcId || !secret) {
@@ -108,7 +111,7 @@ export function startWorkersHeartbeat(opts = {}) {
       return;
     }
     try {
-      const result = await _sendHeartbeat(dispatcherUrl, pcId, secret, tunnelUrl, emailHash);
+      const result = await _sendHeartbeat(dispatcherUrl, pcId, secret, tunnelUrl, emailHash, label);
       console.log(`[WorkersHB] heartbeat 送信成功: ${JSON.stringify(result)}`);
     } catch (e) {
       console.log(`[WorkersHB] heartbeat 送信失敗（続行）: ${e.message}`);
@@ -135,12 +138,13 @@ export function sendImmediateHeartbeat(newUrl) {
   const pcId = process.env.PC_ID;
   const secret = process.env.HMAC_SECRET;
   const email = process.env.WORKERS_EMAIL;
+  const label = process.env.PC_LABEL || null;
 
   if (!dispatcherUrl || !pcId || !secret || !newUrl) return;
 
   const emailHash = email ? _hashEmail(email) : null;
 
-  _sendHeartbeat(dispatcherUrl, pcId, secret, newUrl, emailHash)
+  _sendHeartbeat(dispatcherUrl, pcId, secret, newUrl, emailHash, label)
     .then((r) => console.log(`[WorkersHB] URL変化 即時 heartbeat 送信成功: ${JSON.stringify(r)}`))
     .catch((e) => console.log(`[WorkersHB] URL変化 即時 heartbeat 失敗（続行）: ${e.message}`));
 }

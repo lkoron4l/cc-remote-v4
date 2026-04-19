@@ -3,7 +3,7 @@
  * PC登録・heartbeat・TTL管理（10分）
  *
  * ストレージ構造（SQLite）:
- *   pc:{pcId} -> JSON { pcId, tunnel_url, email_hash, last_heartbeat_at, registered_at }
+ *   pc:{pcId} -> JSON { pcId, tunnel_url, email_hash, label?, last_heartbeat_at, registered_at }
  *
  * expire() は heartbeat 受信時に lazy 削除。Alarm API は使用しない。
  */
@@ -48,19 +48,21 @@ export class PCRegistry {
       return Response.json({ error: 'invalid JSON' }, { status: 400 });
     }
 
-    const { pcId, tunnel_url, email_hash } = body;
+    const { pcId, tunnel_url, email_hash, label } = body;
     if (!pcId || !tunnel_url || !email_hash) {
       return Response.json({ error: 'pcId, tunnel_url, email_hash required' }, { status: 400 });
     }
 
     const now = Date.now();
     const key = `pc:${pcId}`;
-    const existing = await this.state.storage.get(key);
+    const existingRaw = await this.state.storage.get(key);
+    const existing = existingRaw ? JSON.parse(existingRaw) : null;
 
     const record = {
       pcId,
       tunnel_url,
       email_hash,
+      label: label ?? existing?.label ?? null,
       last_heartbeat_at: now,
       registered_at: existing?.registered_at ?? now,
     };
@@ -77,7 +79,7 @@ export class PCRegistry {
       return Response.json({ error: 'invalid JSON' }, { status: 400 });
     }
 
-    const { pcId, tunnel_url } = body;
+    const { pcId, tunnel_url, label } = body;
     if (!pcId) {
       return Response.json({ error: 'pcId required' }, { status: 400 });
     }
@@ -91,6 +93,7 @@ export class PCRegistry {
     const record = JSON.parse(raw);
     record.last_heartbeat_at = Date.now();
     if (tunnel_url) record.tunnel_url = tunnel_url;
+    if (label !== undefined && label !== null) record.label = label;
     await this.state.storage.put(key, JSON.stringify(record));
 
     // lazy 削除: heartbeat 受信のタイミングで期限切れエントリを掃除

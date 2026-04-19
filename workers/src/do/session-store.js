@@ -3,7 +3,11 @@
  * セッショントークン管理（TTL 24時間）
  *
  * ストレージ構造（SQLite）:
- *   session:{token} -> JSON { token, email_hash, created_at, expires_at }
+ *   session:{token} -> JSON { token, email_hash, email?, created_at, expires_at }
+ *
+ * email は link-ticket 発行時に plain email が必要なため後付けで保存する。
+ * 2026-04-17 より前に作られたセッションには email フィールドが無い可能性があるので
+ * _get 側で undefined を許容する。
  *
  * cleanup() は create/get 時に lazy 削除。Alarm API は使用しない。
  */
@@ -48,7 +52,7 @@ export class SessionStore {
       return Response.json({ error: 'invalid JSON' }, { status: 400 });
     }
 
-    const { token, email_hash } = body;
+    const { token, email_hash, email } = body;
     if (!token || !email_hash) {
       return Response.json({ error: 'token and email_hash required' }, { status: 400 });
     }
@@ -57,6 +61,8 @@ export class SessionStore {
     const record = {
       token,
       email_hash,
+      // email は link-ticket 発行時に plain で必要。未指定でも動作させる（後方互換）。
+      ...(email ? { email: String(email).toLowerCase() } : {}),
       created_at: now,
       expires_at: now + SESSION_TTL_MS,
     };

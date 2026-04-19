@@ -75,6 +75,13 @@ workers_dev = true
 # Set via: wrangler secret put OAUTH_REDIRECT_URI --env production
 # Set via: wrangler secret put ALLOWED_ORIGINS --env production
 
+# Android TWA: Digital Asset Links の公開SHA256フィンガープリント。
+# 1つ目 = Upload Key（cc-remote.keystore 2026-04-13 作成、CN=CC Remote）
+# 2つ目 = Play App Signing 管理鍵（初回AABアップロード後にPlay Consoleで確認し追記する）
+[env.production.vars]
+ANDROID_UPLOAD_SHA256 = "A5:3D:13:EB:64:87:86:D0:82:B9:8D:87:25:74:F5:2B:79:C8:FA:17:9C:DD:17:EA:C5:81:50:BA:59:6C:80:A2"
+ANDROID_PLAY_SHA256 = ""
+
 [env.production.assets]
 directory = "../dist"
 binding = "ASSETS"
