@@ -496,17 +496,6 @@ function App() {
         />
       )}
       <div className="flex flex-1 min-h-0">
-        <Sidebar
-          sidebarState={sidebarState}
-          showOverlay={sidebarOverlay}
-          onOverlayClose={() => setSidebarOverlay(false)}
-          sessions={sessionsList}
-          activeSessionId={activeSession}
-          onSessionSelect={setActiveSession}
-          onNewSession={handleNewRoomFromSidebar}
-          onShowSettings={() => setShowSettings(true)}
-          onShowAllSessions={() => setShowSessions(true)}
-        />
         <main className="flex-1 flex flex-col min-h-0">
           <RoomTabs
             sessions={sessionsList}
@@ -569,6 +558,18 @@ function App() {
           />
           <InputArea sessionId={activeSession} token={token} onShowTemplates={() => setShowTemplates(true)} onShowSchedule={() => setShowSchedule(true)} quotedText={quotedText} onQuoteClear={() => setQuotedText('')} suggestedText={suggestedText} onSuggestClear={() => setSuggestedText('')} claudeReady={claudeReady} />
         </main>
+        <Sidebar
+          sidebarState={sidebarState}
+          showOverlay={sidebarOverlay}
+          onOverlayClose={() => setSidebarOverlay(false)}
+          sessions={sessionsList}
+          activeSessionId={activeSession}
+          onSessionSelect={setActiveSession}
+          onNewSession={handleNewRoomFromSidebar}
+          onShowSettings={() => setShowSettings(true)}
+          onShowAllSessions={() => setShowSessions(true)}
+          unreadCount={unreadCount}
+        />
       </div>
 
       {/* インタラクティブチュートリアル (初回自動 + Header 若葉マーク起動) */}

@@ -1,4 +1,4 @@
-// CC-Remote v2 UI — Sidebar (2 状態トグル: open/closed)
+// CC-Remote v2 UI — Sidebar (2 状態トグル: open/closed, 右寄せ)
 //
 // 2 状態 (デスクトップ): 'open' (240px) / 'closed' (0px)
 // モバイル (isMobileWidth()=true): aside は常に 0px。showOverlay=true の時のみ overlay を描画。
@@ -14,6 +14,7 @@
 //   onNewSession: () => void
 //   onShowSettings: () => void
 //   onShowAllSessions?: () => void
+//   unreadCount?: number                 — 設定ボタンに表示する未読バッジ（Header から移動）
 //
 // MUST: A3 transition-[width] duration-200 / B1 stageMode 非依存
 import { useEffect, useState } from 'react';
@@ -26,6 +27,7 @@ function SidebarContents({
   onNewSession,
   onShowSettings,
   onShowAllSessions,
+  unreadCount = 0,
   query,
   setQuery,
 }) {
@@ -35,7 +37,7 @@ function SidebarContents({
     : sessions;
 
   return (
-    <div className="h-full flex flex-col bg-cyber-900 border-r border-navi/20">
+    <div className="h-full flex flex-col bg-cyber-900 border-l border-navi/20">
       <div className="p-2 border-b border-navi/10 flex-shrink-0">
         <input
           type="search"
@@ -100,12 +102,28 @@ function SidebarContents({
 
       <button
         type="button"
-        onClick={onShowSettings}
+        onClick={() => window.dispatchEvent(new CustomEvent('ccr:show-tutorial'))}
         className="flex-shrink-0 border-t border-navi/10 flex items-center gap-2 px-2 py-2 text-txt-muted hover:text-txt-secondary hover:bg-cyber-800 transition-all"
+        title="チュートリアルを再生"
+      >
+        <span className="w-5 h-5 flex items-center justify-center text-sm" role="img" aria-label="チュートリアル">🔰</span>
+        <span className="text-[11px] font-mono">チュートリアル</span>
+      </button>
+
+      <button
+        type="button"
+        data-tutorial-id="settings-btn"
+        onClick={onShowSettings}
+        className="relative flex-shrink-0 border-t border-navi/10 flex items-center gap-2 px-2 py-2 text-txt-muted hover:text-txt-secondary hover:bg-cyber-800 transition-all"
         title="設定"
       >
         <span className="w-5 h-5 flex items-center justify-center text-sm">⚙</span>
         <span className="text-[11px] font-mono">設定</span>
+        {unreadCount > 0 && (
+          <span className="ml-auto min-w-[18px] h-[18px] px-1 bg-alert-red text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
       </button>
     </div>
   );
@@ -121,6 +139,7 @@ export default function Sidebar({
   onNewSession,
   onShowSettings,
   onShowAllSessions,
+  unreadCount = 0,
 }) {
   const [isMobile, setIsMobile] = useState(() => isMobileWidth());
   const [query, setQuery] = useState('');
@@ -159,6 +178,7 @@ export default function Sidebar({
             onNewSession={onNewSession}
             onShowSettings={onShowSettings}
             onShowAllSessions={onShowAllSessions}
+            unreadCount={unreadCount}
             query={query}
             setQuery={setQuery}
           />
@@ -173,7 +193,7 @@ export default function Sidebar({
             aria-label="サイドバーを閉じる"
           />
           <div
-            className="fixed left-0 top-0 bottom-0 z-50 animate-slide-in-left"
+            className="fixed right-0 top-0 bottom-0 z-50 animate-fade-in"
             style={{ width: 240 }}
           >
             <SidebarContents
@@ -183,6 +203,7 @@ export default function Sidebar({
               onNewSession={wrapCallback(onNewSession)}
               onShowSettings={wrapCallback(onShowSettings)}
               onShowAllSessions={onShowAllSessions ? wrapCallback(onShowAllSessions) : null}
+              unreadCount={unreadCount}
               query={query}
               setQuery={setQuery}
             />

@@ -1,14 +1,17 @@
 // CC-Remote v2 UI — Header
 // Phase 2 で中央右エリアに PCDropdown を組み込み。
-// PC 一覧・statuses・onSelectPC は App.jsx から props で受け取る（usePcList は App 側で呼ぶ）。
+// Rev（右サイドバー化）: 🔰チュートリアル / ⚙設定 は Sidebar に移動。
+// Header 右端は [FULLSCREEN] [☰] の 2 アイテムに整理。
+// 互換: onSettingsClick / unreadCount props は受け取るが使わない（破壊的変更を避けるため残置）。
 import PCDropdown from './PCDropdown';
 
 export default function Header({
-  onSettingsClick,
+  // 互換保持: 呼び出し側の App.jsx がまだ渡している
+  onSettingsClick: _onSettingsClick,
+  unreadCount: _unreadCount = 0,
   connected,
   status,
   pcName,
-  unreadCount = 0,
   onFullscreenClick,
   isFullscreen = false,
   // Phase 2: PC 切替ドロップダウン用 props
@@ -19,7 +22,7 @@ export default function Header({
   pcListLoading = false,
   pcListAuthError = false,
   pcListNetworkError = false,
-  // サイドバー開閉 (2 状態: open/closed)
+  // サイドバー開閉 (2 状態: open/closed) — 右端に配置
   onSidebarToggle,
   sidebarState = 'open',
 }) {
@@ -30,21 +33,6 @@ export default function Header({
       <div className="absolute inset-[1px] border border-navi-glow/8 rounded-sm pointer-events-none" />
 
       <div className="flex items-center gap-2.5">
-        {/* Phase 3: サイドバー切替 ☰ */}
-        {onSidebarToggle && (
-          <button
-            type="button"
-            onClick={onSidebarToggle}
-            aria-label={`サイドバー (${sidebarState})`}
-            title="サイドバー切替"
-            className="flex-shrink-0 w-9 h-9 rounded-lg border border-navi-glow/30 bg-cyber-900/60 flex flex-col items-center justify-center gap-[3px] hover:border-navi-glow hover:shadow-[0_0_6px_rgba(0,232,216,0.3)] transition-all"
-          >
-            <span className="w-4 h-[2px] bg-navi-glow rounded" />
-            <span className="w-4 h-[2px] bg-navi-glow rounded" />
-            <span className="w-4 h-[2px] bg-navi-glow rounded" />
-          </button>
-        )}
-
         {/* 接続インジケータ */}
         <div
           aria-label="接続状態"
@@ -99,36 +87,20 @@ export default function Header({
           >FULLSCREEN</button>
         )}
 
-        {/* Tutorial button (若葉マーク) */}
-        <button
-          onClick={() => window.dispatchEvent(new CustomEvent('ccr:show-tutorial'))}
-          aria-label="チュートリアルを再生"
-          title="チュートリアルを再生"
-          className="flex-shrink-0 w-9 h-9 rounded-lg border border-navi-glow/30 bg-cyber-900/60 flex items-center justify-center hover:border-navi-glow hover:shadow-[0_0_8px_rgba(0,232,216,0.4)] transition-all"
-        >
-          {/* Rev 6.1: Unicode 🔰 絵文字で「普通の若葉マーク」(向き・色とも OS 標準) */}
-          <span className="text-[22px] leading-none" role="img" aria-label="チュートリアル">🔰</span>
-        </button>
-
-        {/* Config button */}
-        <div className="relative flex-shrink-0">
+        {/* サイドバー切替 ☰ — Rev: 右サイドバーに合わせて右端に配置 */}
+        {onSidebarToggle && (
           <button
-            data-tutorial-id="settings-btn"
-            onClick={onSettingsClick}
-            aria-label="設定"
-            className="chip-btn text-sm px-2 py-1.5 min-h-0"
+            type="button"
+            onClick={onSidebarToggle}
+            aria-label={`サイドバー (${sidebarState})`}
+            title="サイドバー切替"
+            className="flex-shrink-0 w-9 h-9 rounded-lg border border-navi-glow/30 bg-cyber-900/60 flex flex-col items-center justify-center gap-[3px] hover:border-navi-glow hover:shadow-[0_0_6px_rgba(0,232,216,0.3)] transition-all"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
+            <span className="w-4 h-[2px] bg-navi-glow rounded" />
+            <span className="w-4 h-[2px] bg-navi-glow rounded" />
+            <span className="w-4 h-[2px] bg-navi-glow rounded" />
           </button>
-          {unreadCount > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-0.5 bg-alert-red text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none pointer-events-none">
-              {unreadCount > 99 ? '99+' : unreadCount}
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
     </header>
