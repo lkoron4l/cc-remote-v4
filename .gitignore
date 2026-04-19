@@ -86,3 +86,7 @@ Thumbs.db
 
 # MCP local config
 .mcp.json
+
+# QA screenshots (PoC captures, not for repo)
+qa/screenshots/
+qa/*.png

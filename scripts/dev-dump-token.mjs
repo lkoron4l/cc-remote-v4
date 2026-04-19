@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+if (process.env.NODE_ENV === 'production') {
+  console.error('[dev-dump-token] refused: NODE_ENV=production. This script is for development only.');
+  process.exit(1);
+}
+
 const DB_PATH = path.join(os.homedir(), 'AppData', 'Local', 'cc-remote', 'cc-remote.db');
 
 const SQL = await initSqlJs({});
