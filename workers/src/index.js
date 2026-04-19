@@ -93,6 +93,14 @@ export default {
       return handleInviteAccept(request, env);
     }
 
+    // POST /api/client-log — クライアント window.onerror / unhandledrejection のシンク。
+    // 本文は読み捨てで 204 を返す（将来 KV/Analytics Engine に流す余地は残す）。
+    // 現状は "route exists, 2xx" で充分（コンソールの 405 ノイズ解消が目的）。
+    if (request.method === 'POST' && pathname === '/api/client-log') {
+      try { await request.text(); } catch {}
+      return new Response(null, { status: 204 });
+    }
+
     // Workers Assets: 上記の API ルートにマッチしなければ静的ファイル配信へ。
     // `not_found_handling = single-page-application` 指定済のため、
     // 存在しないパスは index.html が返り、クライアント側 SPA ルーティングへ委譲される。
