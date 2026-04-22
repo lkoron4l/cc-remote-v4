@@ -55,7 +55,7 @@ app.use((req, res, next) => {
 // CORS — restrict origins (no wildcard fallback)
 // Static allowlist (always-on): trycloudflare tunnel + localhost
 // Extra origins come from env.ALLOWED_ORIGIN (single) or env.ALLOWED_ORIGINS (CSV)
-const ALLOWED_ORIGIN_PATTERN = /\.trycloudflare\.com$|^https?:\/\/localhost(:\d+)?$/i;
+const ALLOWED_ORIGIN_PATTERN = /\.trycloudflare\.com$|^https:\/\/cc-remote\.innovationinnovation8\.workers\.dev$|^https?:\/\/localhost(:\d+)?$/i;
 const EXTRA_ALLOWED_ORIGINS = new Set(
   [
     ...(process.env.ALLOWED_ORIGIN ? [process.env.ALLOWED_ORIGIN] : []),
